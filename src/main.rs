@@ -6,13 +6,25 @@ use axum::{
 };
 use color_eyre::eyre::eyre;
 use serde::Deserialize;
+use std::str::FromStr;
+use tracing::{info, Level};
+use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
+    let filter = Targets::from_str(std::env::var("RUST_LOG").as_deref().unwrap_or("info"))
+        .expect("Invalid RUST_LOG value");
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .json()
+        .finish()
+        .with(filter)
+        .init();
+
     let app = Router::new().route("/", get(root_get));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    println!("Listening on {}", listener.local_addr().unwrap());
+    info!("Listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
     // let cat = get_ascii_cat().await.unwrap();
     // println!("{cat}");
