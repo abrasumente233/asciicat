@@ -1,10 +1,20 @@
+use axum::{routing::get, Router};
 use color_eyre::eyre::eyre;
 use serde::Deserialize;
 
 #[tokio::main]
 async fn main() {
-    let cat = get_ascii_cat().await.unwrap();
-    println!("{cat}");
+    let app = Router::new().route("/", get(root_get));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    println!("Listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+    // let cat = get_ascii_cat().await.unwrap();
+    // println!("{cat}");
+}
+
+async fn root_get() -> String {
+    get_ascii_cat().await.unwrap()
 }
 
 async fn get_ascii_cat() -> color_eyre::Result<String> {
