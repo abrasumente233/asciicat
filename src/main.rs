@@ -1,4 +1,9 @@
-use axum::{routing::get, Router};
+use axum::{
+    http::{header, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use color_eyre::eyre::eyre;
 use serde::Deserialize;
 
@@ -13,8 +18,16 @@ async fn main() {
     // println!("{cat}");
 }
 
-async fn root_get() -> String {
-    get_ascii_cat().await.unwrap()
+async fn root_get() -> impl IntoResponse {
+    match get_ascii_cat().await {
+        Ok(art) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            art,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e)).into_response(),
+    }
 }
 
 async fn get_ascii_cat() -> color_eyre::Result<String> {
