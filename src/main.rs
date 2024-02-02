@@ -19,9 +19,9 @@ async fn get_cat_url() -> color_eyre::Result<String> {
     }
 
     let cat_images: Vec<CatImage> = resp.json().await?;
-    let Some(image) = cat_images.first() else {
+    let Some(image) = cat_images.into_iter().next() else {
         return Err(eyre!("The cat API did not return any images."));
     };
 
-    Ok(image.url.clone())
+    Ok(image.url)
 }
