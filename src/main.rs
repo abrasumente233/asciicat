@@ -22,7 +22,7 @@ async fn root_get() -> impl IntoResponse {
     match get_ascii_cat().await {
         Ok(art) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
             art,
         )
             .into_response(),
@@ -59,7 +59,12 @@ async fn get_ascii_cat() -> color_eyre::Result<String> {
         .await?;
 
     let image = image::load_from_memory(&image_bytes)?;
-    let ascii_art = artem::convert(image, &artem::ConfigBuilder::new().build());
+    let ascii_art = artem::convert(
+        image,
+        &artem::ConfigBuilder::new()
+            .target(artem::config::TargetType::HtmlFile(true, true))
+            .build(),
+    );
 
     Ok(ascii_art)
 }
