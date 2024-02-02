@@ -1,11 +1,3 @@
-#[derive(serde::Deserialize, Debug)]
-struct CatImage {
-    id: String,
-    url: String,
-    width: u32,
-    height: u32,
-}
-
 #[tokio::main]
 async fn main() {
     let resp = reqwest::get("https://api.thecatapi.com/v1/images/search")
@@ -13,6 +5,11 @@ async fn main() {
         .unwrap();
     if !resp.status().is_success() {
         panic!("The request was not successful: {}", resp.status());
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    struct CatImage {
+        url: String,
     }
 
     let cat_images: Vec<CatImage> = resp.json().await.unwrap();
