@@ -16,7 +16,11 @@ async fn get_cat_bytes() -> color_eyre::Result<Vec<u8>> {
         url: String,
     }
 
-    let url = reqwest::get("https://api.thecatapi.com/v1/images/search")
+    let client = reqwest::Client::new();
+
+    let url = client
+        .get("https://api.thecatapi.com/v1/images/search")
+        .send()
         .await?
         .error_for_status()?
         .json::<Vec<CatImage>>()
@@ -26,7 +30,9 @@ async fn get_cat_bytes() -> color_eyre::Result<Vec<u8>> {
         .ok_or(eyre!("The cat API did not return any images."))
         .map(|cat_image| cat_image.url)?;
 
-    Ok(reqwest::get(&url)
+    Ok(client
+        .get(&url)
+        .send()
         .await?
         .error_for_status()?
         .bytes()
