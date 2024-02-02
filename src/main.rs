@@ -1,16 +1,13 @@
 use color_eyre::eyre::eyre;
-use pretty_hex::PrettyHex;
 use serde::Deserialize;
 
 #[tokio::main]
 async fn main() {
-    let image = get_cat_bytes().await.unwrap();
-    dbg!(image.len());
-    println!("{:?}", &image[..200].hex_dump());
-    //println!("The cat image URL is: {}", image_url);
+    let cat = get_ascii_cat().await.unwrap();
+    println!("{cat}");
 }
 
-async fn get_cat_bytes() -> color_eyre::Result<Vec<u8>> {
+async fn get_ascii_cat() -> color_eyre::Result<String> {
     #[derive(Deserialize, Debug)]
     struct CatImage {
         url: String,
@@ -30,12 +27,16 @@ async fn get_cat_bytes() -> color_eyre::Result<Vec<u8>> {
         .ok_or(eyre!("The cat API did not return any images."))
         .map(|cat_image| cat_image.url)?;
 
-    Ok(client
+    let image_bytes = client
         .get(&url)
         .send()
         .await?
         .error_for_status()?
         .bytes()
-        .await?
-        .to_vec())
+        .await?;
+
+    let image = image::load_from_memory(&image_bytes)?;
+    let ascii_art = artem::convert(image, &artem::ConfigBuilder::new().build());
+
+    Ok(ascii_art)
 }
