@@ -4,7 +4,7 @@ use axum::{
     routing::get,
     Router,
 };
-use color_eyre::eyre::eyre;
+use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
 use std::str::FromStr;
 use tracing::{info, Level};
@@ -20,6 +20,13 @@ async fn main() {
         },
     ));
 
+    let (_honeyguard, _tracer) = opentelemetry_honeycomb::new_pipeline(
+        std::env::var("HONEYCOMB_API_KEY").expect("$HONEYCOMB_API_KEY should be set"),
+        "asciicat".into(),
+    )
+    .install()
+    .unwrap();
+
     let filter = Targets::from_str(std::env::var("RUST_LOG").as_deref().unwrap_or("info"))
         .expect("Invalid RUST_LOG value");
     tracing_subscriber::fmt()
@@ -34,8 +41,6 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     info!("Listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
-    // let cat = get_ascii_cat().await.unwrap();
-    // println!("{cat}");
 }
 
 async fn root_get() -> impl IntoResponse {
@@ -50,33 +55,16 @@ async fn root_get() -> impl IntoResponse {
     }
 }
 
-async fn get_ascii_cat() -> color_eyre::Result<String> {
-    #[derive(Deserialize, Debug)]
-    struct CatImage {
-        url: String,
-    }
+#[derive(Deserialize, Debug)]
+struct CatImage {
+    url: String,
+}
 
+async fn get_ascii_cat() -> Result<String> {
     let client = reqwest::Client::new();
 
-    let url = client
-        .get("https://api.thecatapi.com/v1/images/search")
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<Vec<CatImage>>()
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(eyre!("The cat API did not return any images."))
-        .map(|cat_image| cat_image.url)?;
-
-    let image_bytes = client
-        .get(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let url = get_cat_url(&client).await?;
+    let image_bytes = download_url(&client, &url).await?;
 
     let image = image::load_from_memory(&image_bytes)?;
     let ascii_art = artem::convert(
@@ -87,4 +75,29 @@ async fn get_ascii_cat() -> color_eyre::Result<String> {
     );
 
     Ok(ascii_art)
+}
+
+async fn get_cat_url(client: &reqwest::Client) -> Result<String> {
+    client
+        .get("https://api.thecatapi.com/v1/images/search")
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Vec<CatImage>>()
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(eyre!("The cat API did not return any images."))
+        .map(|cat_image| cat_image.url)
+}
+
+async fn download_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    Ok(client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?
+        .to_vec())
 }
