@@ -1,10 +1,15 @@
 use axum::{
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     Router,
 };
 use color_eyre::{eyre::eyre, Result};
+use opentelemetry::{
+    global,
+    trace::{get_active_span, FutureExt, Span, Status, TraceContextExt, Tracer},
+    Context, KeyValue,
+};
 use serde::Deserialize;
 use std::str::FromStr;
 use tracing::{info, Level};
@@ -43,15 +48,42 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn root_get() -> impl IntoResponse {
-    match get_ascii_cat().await {
+async fn root_get(headers: HeaderMap) -> impl IntoResponse {
+    let tracer = global::tracer("");
+    let mut span = tracer.start("root_get");
+    span.set_attribute(KeyValue::new(
+        "user-agent",
+        headers
+            .get(header::USER_AGENT)
+            .map(|h| h.to_str().unwrap_or_default().to_owned())
+            .unwrap_or_default(),
+    ));
+
+    root_get_inner()
+        .with_context(Context::current_with_span(span))
+        .await
+}
+
+async fn root_get_inner() -> impl IntoResponse {
+    let tracer = global::tracer("");
+    match get_ascii_cat()
+        .with_context(Context::current_with_span(tracer.start("get_ascii_cat")))
+        .await
+    {
         Ok(art) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
             art,
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e)).into_response(),
+        Err(e) => {
+            get_active_span(|span| {
+                span.set_status(Status::Error {
+                    description: format!("{e}").into(),
+                })
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", e)).into_response()
+        }
     }
 }
 
@@ -61,18 +93,38 @@ struct CatImage {
 }
 
 async fn get_ascii_cat() -> Result<String> {
+    let tracer = global::tracer("");
+
     let client = reqwest::Client::new();
 
-    let url = get_cat_url(&client).await?;
-    let image_bytes = download_url(&client, &url).await?;
+    let url = get_cat_url(&client)
+        .with_context(Context::current_with_span(tracer.start("get_cat_url")))
+        .await?;
 
-    let image = image::load_from_memory(&image_bytes)?;
-    let ascii_art = artem::convert(
-        image,
-        &artem::ConfigBuilder::new()
-            .target(artem::config::TargetType::HtmlFile(true, true))
-            .build(),
-    );
+    let image_bytes = download_url(&client, &url)
+        .with_context(Context::current_with_span(tracer.start("download_url")))
+        .await?;
+
+    let image = tracer.in_span(
+        "image::load_from_memory",
+        |cx| -> std::result::Result<image::DynamicImage, _> {
+            let img = image::load_from_memory(&image_bytes)?;
+            cx.span()
+                .set_attribute(KeyValue::new("width", img.width() as i64));
+            cx.span()
+                .set_attribute(KeyValue::new("height", img.height() as i64));
+            Ok::<_, color_eyre::Report>(img)
+        },
+    )?;
+
+    let ascii_art = tracer.in_span("artem::convert", |_cx| {
+        artem::convert(
+            image,
+            &artem::ConfigBuilder::new()
+                .target(artem::config::TargetType::HtmlFile(true, true))
+                .build(),
+        )
+    });
 
     Ok(ascii_art)
 }
