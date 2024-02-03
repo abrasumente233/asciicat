@@ -1,4 +1,5 @@
 use axum::{
+    extract::State,
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
@@ -14,6 +15,11 @@ use serde::Deserialize;
 use std::str::FromStr;
 use tracing::{info, Level};
 use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
+
+#[derive(Clone)]
+struct ServerState {
+    client: reqwest::Client,
+}
 
 #[tokio::main]
 async fn main() {
@@ -41,14 +47,18 @@ async fn main() {
         .with(filter)
         .init();
 
-    let app = Router::new().route("/", get(root_get));
+    let state = ServerState {
+        client: reqwest::Client::default(),
+    };
+
+    let app = Router::new().route("/", get(root_get)).with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     info!("Listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn root_get(headers: HeaderMap) -> impl IntoResponse {
+async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
     let tracer = global::tracer("");
     let mut span = tracer.start("root_get");
     span.set_attribute(KeyValue::new(
@@ -59,14 +69,14 @@ async fn root_get(headers: HeaderMap) -> impl IntoResponse {
             .unwrap_or_default(),
     ));
 
-    root_get_inner()
+    root_get_inner(state)
         .with_context(Context::current_with_span(span))
         .await
 }
 
-async fn root_get_inner() -> impl IntoResponse {
+async fn root_get_inner(state: ServerState) -> impl IntoResponse {
     let tracer = global::tracer("");
-    match get_ascii_cat()
+    match get_ascii_cat(&state.client)
         .with_context(Context::current_with_span(tracer.start("get_ascii_cat")))
         .await
     {
@@ -92,16 +102,14 @@ struct CatImage {
     url: String,
 }
 
-async fn get_ascii_cat() -> Result<String> {
+async fn get_ascii_cat(client: &reqwest::Client) -> Result<String> {
     let tracer = global::tracer("");
 
-    let client = reqwest::Client::new();
-
-    let url = get_cat_url(&client)
+    let url = get_cat_url(client)
         .with_context(Context::current_with_span(tracer.start("get_cat_url")))
         .await?;
 
-    let image_bytes = download_url(&client, &url)
+    let image_bytes = download_url(client, &url)
         .with_context(Context::current_with_span(tracer.start("download_url")))
         .await?;
 
