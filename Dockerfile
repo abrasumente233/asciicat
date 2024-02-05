@@ -1,4 +1,7 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04 AS base
+
+#--------------------------------------------------
+FROM base AS builder
 
 RUN set -eux; \
     apt-get update; \
@@ -20,7 +23,28 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     #--mount=type=cache,target=/root/.rustup \
     set -eux; \
     cargo build --release; \
-    cp ./target/release/asciicat .
+    objcopy --compress-debug-sections ./target/release/asciicat ./asciicat
+
+#--------------------------------------------------
+FROM base AS app
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Install run-time dependencies, remove extra APT files afterwards.
+# This must be done in the same `RUN` command, otherwise it doesn't help
+# to reduce the image size.
+RUN set -eux; \
+		apt update; \
+		apt install -y --no-install-recommends \
+			ca-certificates \
+			; \
+		apt clean autoclean; \
+		apt autoremove --yes; \
+		rm -rf /var/lib/{apt,dpkg,cache,log}/
+
+# Copy app from builder
+WORKDIR /app
+COPY --from=builder /app/asciicat .
 
 EXPOSE 8080
 CMD ["/app/asciicat"]
