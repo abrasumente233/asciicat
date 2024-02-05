@@ -6,19 +6,21 @@ use axum::{
     Router,
 };
 use color_eyre::{eyre::eyre, Result};
+use locat::Locat;
 use opentelemetry::{
     global,
     trace::{get_active_span, FutureExt, Span, Status, TraceContextExt, Tracer},
     Context, KeyValue,
 };
 use serde::Deserialize;
-use std::str::FromStr;
+use std::{net::IpAddr, str::FromStr, sync::Arc};
 use tracing::{info, warn, Level};
 use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
 struct ServerState {
     client: reqwest::Client,
+    locat: Arc<Locat>,
 }
 
 #[tokio::main]
@@ -54,6 +56,7 @@ async fn main() {
 
     let state = ServerState {
         client: reqwest::Client::default(),
+        locat: Arc::new(Locat::new("todo", "todo")),
     };
 
     let app = Router::new().route("/", get(root_get)).with_state(state);
@@ -64,6 +67,13 @@ async fn main() {
         .with_graceful_shutdown(quit_sig)
         .await
         .unwrap();
+}
+
+fn get_client_addr(headers: &HeaderMap) -> Option<IpAddr> {
+    let header = headers.get("fly-client-ip")?;
+    let header = header.to_str().ok()?;
+    let addr = header.parse().ok()?;
+    Some(addr)
 }
 
 async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
@@ -77,6 +87,17 @@ async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl 
             .unwrap_or_default(),
     ));
 
+    // get geo-location from IP
+    if let Some(addr) = get_client_addr(&headers) {
+        match state.locat.ip_to_iso_code(addr) {
+            Some(country) => {
+                info!("Got request from {}", country);
+                span.set_attribute(KeyValue::new("country", country.to_owned()));
+            }
+            None => warn!("Could not find country for IP address"),
+        }
+    }
+
     root_get_inner(state)
         .with_context(Context::current_with_span(span))
         .await
@@ -84,6 +105,7 @@ async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl 
 
 async fn root_get_inner(state: ServerState) -> impl IntoResponse {
     let tracer = global::tracer("");
+
     match get_ascii_cat(&state.client)
         .with_context(Context::current_with_span(tracer.start("get_ascii_cat")))
         .await
