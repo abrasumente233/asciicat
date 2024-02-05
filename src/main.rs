@@ -54,9 +54,11 @@ async fn main() {
         warn!("Initiating graceful shutdown");
     };
 
+    let country_db_path =
+        std::env::var("GEOLITE2_COUNTRY_DB").expect("$GEOLITE2_COUNTRY_DB should be set");
     let state = ServerState {
         client: reqwest::Client::default(),
-        locat: Arc::new(Locat::new("todo", "todo")),
+        locat: Arc::new(Locat::new(&country_db_path, "todo").unwrap()),
     };
 
     let app = Router::new().route("/", get(root_get)).with_state(state);
