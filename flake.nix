@@ -17,12 +17,12 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+        isDarwin = pkgs.lib.strings.hasSuffix "-darwin" system;
         rustToolchain = pkgs.rust-bin.stable.latest.default;
         nativeBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
-          darwin.apple_sdk.frameworks.SystemConfiguration
-        ];
+        ] ++ lib.optional (isDarwin) darwin.apple_sdk.frameworks.SystemConfiguration;
         buildInputs = with pkgs; [ openssl sqlite ];
       in
       with pkgs;
