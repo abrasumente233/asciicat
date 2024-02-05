@@ -13,7 +13,7 @@ use opentelemetry::{
 };
 use serde::Deserialize;
 use std::str::FromStr;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
@@ -47,6 +47,11 @@ async fn main() {
         .with(filter)
         .init();
 
+    let quit_sig = async {
+        _ = tokio::signal::ctrl_c().await;
+        warn!("Initiating graceful shutdown");
+    };
+
     let state = ServerState {
         client: reqwest::Client::default(),
     };
@@ -55,7 +60,10 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     info!("Listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(quit_sig)
+        .await
+        .unwrap();
 }
 
 async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
