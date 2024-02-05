@@ -51,5 +51,8 @@ RUN set -eux; \
 WORKDIR /app
 COPY --from=builder /app/asciicat .
 
+RUN mkdir /db
+COPY ./db/GeoLite2-Country.mmdb /db/
+
 EXPOSE 8080
 CMD ["/app/asciicat"]
