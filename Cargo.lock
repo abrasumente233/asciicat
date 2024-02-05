@@ -114,6 +114,7 @@ dependencies = [
  "axum",
  "color-eyre",
  "image",
+ "locat",
  "opentelemetry",
  "opentelemetry-honeycomb",
  "reqwest",
@@ -1514,6 +1515,12 @@ name = "linux-raw-sys"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01cda141df6706de531b6c46c3a33ecca755538219bd484262fa09410c13539c"
+
+[[package]]
+name = "locat"
+version = "0.2.0"
+source = "registry+ssh://git@ssh.shipyard.rs/abrasumente/crate-index.git"
+checksum = "7e7430f6caf0e56f8c0e70c9d43f7803a558b14a524d1f6f2a5e5b1f451aa56a"
 
 [[package]]
 name = "lock_api"
