@@ -56,12 +56,16 @@ async fn main() {
 
     let country_db_path =
         std::env::var("GEOLITE2_COUNTRY_DB").expect("$GEOLITE2_COUNTRY_DB should be set");
+    let analytics_db_path = std::env::var("ANALYTICS_DB").expect("$ANALYTICS_DB should be set");
     let state = ServerState {
         client: reqwest::Client::default(),
-        locat: Arc::new(Locat::new(&country_db_path, "todo").unwrap()),
+        locat: Arc::new(Locat::new(&country_db_path, &analytics_db_path).unwrap()),
     };
 
-    let app = Router::new().route("/", get(root_get)).with_state(state);
+    let app = Router::new()
+        .route("/", get(root_get))
+        .route("/analytics", get(analytics_get))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     info!("Listening on {}", listener.local_addr().unwrap());
@@ -78,6 +82,14 @@ fn get_client_addr(headers: &HeaderMap) -> Option<IpAddr> {
     Some(addr)
 }
 
+async fn analytics_get(State(state): State<ServerState>) -> impl IntoResponse {
+    let mut response = String::new();
+    for (country, count) in state.locat.get_analytics().await.unwrap() {
+        response.push_str(&format!("{}: {}\n", country, count));
+    }
+    response.into_response()
+}
+
 async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
     let tracer = global::tracer("");
     let mut span = tracer.start("root_get");
@@ -91,7 +103,7 @@ async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl 
 
     // get geo-location from IP
     if let Some(addr) = get_client_addr(&headers) {
-        match state.locat.ip_to_iso_code(addr) {
+        match state.locat.ip_to_iso_code(addr).await {
             Some(country) => {
                 info!("Got request from {}", country);
                 span.set_attribute(KeyValue::new("country", country.to_owned()));

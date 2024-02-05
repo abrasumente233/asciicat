@@ -5,7 +5,7 @@ FROM base AS builder
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends openssh-client git-core curl ca-certificates gcc libc6-dev pkg-config libssl-dev
+    apt-get install -y --no-install-recommends openssh-client git-core curl ca-certificates gcc libc6-dev pkg-config libssl-dev libsqlite3-dev
 
 RUN set -eux; \
     curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable --no-modify-path -y
@@ -42,6 +42,7 @@ RUN set -eux; \
 		apt update; \
 		apt install -y --no-install-recommends \
 			ca-certificates \
+      libsqlite3-0 \
 			; \
 		apt clean autoclean; \
 		apt autoremove --yes; \
