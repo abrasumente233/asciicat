@@ -9,5 +9,5 @@ docker-build:
     --secret id=shipyard-token,src=secrets/shipyard \
     .
 
-deploy:
-  fly deploy --remote-only
+deploy: docker-build
+  fly deploy --local-only
