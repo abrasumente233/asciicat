@@ -5,7 +5,7 @@ FROM base AS builder
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends curl ca-certificates gcc libc6-dev pkg-config libssl-dev
+    apt-get install -y --no-install-recommends openssh-client git-core curl ca-certificates gcc libc6-dev pkg-config libssl-dev
 
 RUN set -eux; \
     curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable --no-modify-path -y
@@ -15,13 +15,18 @@ RUN set -eux; \
     rustup --version
 
 WORKDIR /app
+COPY .cargo .cargo
 COPY src src
 COPY Cargo.toml Cargo.toml ./
+RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan ssh.shipyard.rs >> ~/.ssh/known_hosts
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/app/.cargo/git \
     --mount=type=cache,target=/app/target \
+    --mount=type=ssh \
+    --mount=type=secret,id=shipyard-token \
     #--mount=type=cache,target=/root/.rustup \
     set -eux; \
+    CARGO_REGISTRIES_ABRASUMENTE_TOKEN=$(cat /run/secrets/shipyard-token) \
     cargo build --release; \
     objcopy --compress-debug-sections ./target/release/asciicat ./asciicat
 
