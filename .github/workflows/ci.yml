@@ -19,7 +19,7 @@ jobs:
           GIT_CRYPT_KEY: ${{ secrets.GIT_CRYPT_KEY }}
         run: |
           sudo apt install -y git-crypt
-          cat "$GIT_CRYPT_KEY" | base64 -d > key-file
+          echo "$GIT_CRYPT_KEY" | base64 -d > key-file
           git-crypt unlock key-file
       - name: install nix
         uses: DeterminateSystems/nix-installer-action@main
