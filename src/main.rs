@@ -51,7 +51,7 @@ async fn main() {
 
     let quit_sig = async {
         _ = tokio::signal::ctrl_c().await;
-        warn!("Initiating graceful shutdown");
+        warn!("Initiating graceful shutdown!");
     };
 
     let country_db_path =
