@@ -1,3 +1,6 @@
 /target
 /db
 /.direnv
+
+# nix build artifact
+result
