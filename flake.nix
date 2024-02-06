@@ -23,8 +23,10 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+
         rustToolchain = pkgs.rust-bin.stable.latest.default;
-        isDarwin = pkgs.lib.strings.hasSuffix "-darwin" system;
+
+        # setting up crane lib with the shipyard registry
         craneLibWithoutRegistry = crane.lib.${system}.overrideToolchain rustToolchain;
         shipyardToken = builtins.readFile ./secrets/shipyard;
         craneLib = craneLibWithoutRegistry.appendCrateRegistries [
@@ -36,6 +38,9 @@
             };
           })
         ];
+
+        # common source and build dependencies
+        isDarwin = pkgs.lib.strings.hasSuffix "-darwin" system;
         commonInputs = {
           src = craneLib.cleanCargoSource (craneLib.path ./.);
           nativeBuildInputs = with pkgs; [
@@ -44,24 +49,22 @@
           ] ++ lib.optional (isDarwin) darwin.apple_sdk.frameworks.SystemConfiguration;
           buildInputs = with pkgs; [ openssl sqlite ];
         };
-        cargoArtifacts = craneLib.buildDepsOnly commonInputs;
+
+        # build the rust app
         bin = craneLib.buildPackage commonInputs // {
-          inherit cargoArtifacts;
-        };
-        dockerImage = pkgs.dockerTools.buildImage {
-          name = "asciicat";
-          tag = "latest";
-          copyToRoot = [ bin ];
-          config = {
-            # TODO: why prefix with ${bin}?
-            Cmd = [ "${bin}/bin/asciicat" ];
-          };
+          cargoArtifacts = craneLib.buildDepsOnly commonInputs;
         };
       in
       with pkgs;
       {
         packages = {
-          inherit bin dockerImage;
+          dockerImage = pkgs.dockerTools.buildImage {
+            name = "asciicat";
+            tag = "latest";
+            config = {
+              Cmd = [ "${bin}/bin/asciicat" ];
+            };
+          };
           default = bin;
         };
         devShells.default = mkShell {
