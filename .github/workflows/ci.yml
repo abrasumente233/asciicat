@@ -14,10 +14,11 @@ jobs:
     steps:
       - name: git checkout
         uses: actions/checkout@v3
-      - name: Install Nix
+      - name: install nix
         uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: nix build .#dockerImage
+      - name: nix build
+        run: nix build .#dockerImage
       - name: run tree
         run: tree .
       - uses: actions/upload-artifact@v4
