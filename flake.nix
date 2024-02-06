@@ -36,7 +36,7 @@
             };
           })
         ];
-        commandArgs = {
+        commonInputs = {
           src = craneLib.cleanCargoSource (craneLib.path ./.);
           nativeBuildInputs = with pkgs; [
             rustToolchain
@@ -44,9 +44,8 @@
           ] ++ lib.optional (isDarwin) darwin.apple_sdk.frameworks.SystemConfiguration;
           buildInputs = with pkgs; [ openssl sqlite ];
         };
-        cargoArtifacts = craneLib.buildDepsOnly commandArgs;
-        bin = craneLib.buildPackage commandArgs // {
-          # TODO: commandArgs is stupid...
+        cargoArtifacts = craneLib.buildDepsOnly commonInputs;
+        bin = craneLib.buildPackage commonInputs // {
           inherit cargoArtifacts;
         };
         dockerImage = pkgs.dockerTools.buildImage {
