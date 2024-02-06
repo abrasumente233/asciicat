@@ -26,7 +26,7 @@ struct ServerState {
 #[tokio::main]
 async fn main() {
     let _guard = sentry::init((
-        std::env::var("SENTRY_DSN").expect("$SENTRY_DSN must be set"),
+        std::env::var("SENTRY_DSN").expect("$SENTRY_DSN should be set"),
         sentry::ClientOptions {
             release: sentry::release_name!(),
             ..Default::default()
@@ -34,7 +34,7 @@ async fn main() {
     ));
 
     let (_honeyguard, _tracer) = opentelemetry_honeycomb::new_pipeline(
-        std::env::var("HONEYCOMB_API_KEY").expect("$HONEYCOMB_API_KEY must be set"),
+        std::env::var("HONEYCOMB_API_KEY").expect("$HONEYCOMB_API_KEY should be set"),
         "asciicat".into(),
     )
     .install()
@@ -55,8 +55,8 @@ async fn main() {
     };
 
     let country_db_path =
-        std::env::var("GEOLITE2_COUNTRY_DB").expect("$GEOLITE2_COUNTRY_DB must be set");
-    let analytics_db_path = std::env::var("ANALYTICS_DB").expect("$ANALYTICS_DB must be set");
+        std::env::var("GEOLITE2_COUNTRY_DB").expect("$GEOLITE2_COUNTRY_DB should be set");
+    let analytics_db_path = std::env::var("ANALYTICS_DB").expect("$ANALYTICS_DB should be set");
     let state = ServerState {
         client: reqwest::Client::default(),
         locat: Arc::new(Locat::new(&country_db_path, &analytics_db_path).unwrap()),
