@@ -10,7 +10,6 @@
 //!
 //! ### Example
 //! ```rust,no_run
-//! use async_executors::TokioTpBuilder;
 //! use opentelemetry::trace::Tracer;
 //! use opentelemetry::global::shutdown_tracer_provider;
 //! use opentelemetry_honeycomb::HoneycombApiKey;
@@ -18,12 +17,6 @@
 //! use std::sync::Arc;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-//!     let mut builder = TokioTpBuilder::new();
-//!     builder
-//!         .tokio_builder()
-//!         .enable_io();
-//!     let executor = Arc::new(builder.build().expect("Failed to build Tokio executor"));
-//!
 //!     // Create a new instrumentation pipeline.
 //!     let (_flusher, tracer) = opentelemetry_honeycomb::new_pipeline(
 //!         HoneycombApiKey::new(
@@ -32,8 +25,6 @@
 //!         ),
 //!         std::env::var("HONEYCOMB_DATASET")
 //!             .expect("Missing or invalid environment variable HONEYCOMB_DATASET"),
-//!         executor.clone(),
-//!         move |fut| executor.block_on(fut),
 //!     ).install().expect("Failed to install OpenTelemetry pipeline");
 //!
 //!     tracer.in_span("doing_work", |cx| {
@@ -46,22 +37,24 @@
 //! ```
 use async_channel::Receiver;
 use async_std::sync::RwLock;
-use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use hazy::OpaqueDebug;
 use libhoney::transmission::Transmission;
 use libhoney::{Client, Event, FieldHolder, Response, Value};
-use log::{debug, error, trace};
-use opentelemetry::sdk::export::trace::{ExportResult, SpanData, SpanExporter};
 use opentelemetry::sdk::export::ExportError;
 use opentelemetry::sdk::trace::{Span, SpanProcessor};
 use opentelemetry::sdk::Resource;
-use opentelemetry::trace::{SpanId, StatusCode, TraceError, TraceId, TraceResult, TracerProvider};
+use opentelemetry::trace::{SpanId, Status, TraceError, TraceId, TraceResult, TracerProvider};
+use opentelemetry::{
+    sdk::export::trace::{ExportResult, SpanData, SpanExporter},
+    trace::SpanKind,
+};
 use opentelemetry::{Array, Context, KeyValue};
 use serde_json::Number;
 use thiserror::Error;
+use tracing::{debug, error, trace};
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -90,21 +83,24 @@ impl HoneycombApiKey {
     }
 }
 
-/// Create a new exporter pipeline builder.
-pub fn new_pipeline<B>(
-    api_key: HoneycombApiKey,
-    dataset: String,
-    executor: FutureExecutor,
-    block_on: B,
-) -> HoneycombPipelineBuilder
+impl<T> From<T> for HoneycombApiKey
 where
-    B: Fn(BoxFuture<()>) + Send + Sync + 'static,
+    T: Into<String>,
 {
+    fn from(s: T) -> Self {
+        Self::new(s.into())
+    }
+}
+
+/// Create a new exporter pipeline builder.
+pub fn new_pipeline(
+    api_key: impl Into<HoneycombApiKey>,
+    dataset: String,
+) -> HoneycombPipelineBuilder {
     HoneycombPipelineBuilder {
-        api_key,
-        block_on: Arc::new(block_on),
+        api_key: api_key.into(),
+        block_on: Arc::new(|f| tokio::runtime::Handle::current().block_on(f)),
         dataset,
-        executor,
         trace_config: None,
         transmission_options: libhoney::transmission::Options {
             user_agent_addition: Some(format!(
@@ -115,8 +111,12 @@ where
             ..Default::default()
         },
         on_span_start: None,
+        executor: Arc::new(TokioExecutor),
     }
 }
+
+pub type BlockOn = Arc<dyn Fn(BoxFuture<()>) + Send + Sync>;
+pub type OnSpanStart = Arc<dyn Fn(&mut Span, &Context) + Send + Sync>;
 
 /// Pipeline builder
 #[derive(Derivative)]
@@ -124,14 +124,14 @@ where
 pub struct HoneycombPipelineBuilder {
     api_key: HoneycombApiKey,
     #[derivative(Debug = "ignore")]
-    block_on: Arc<dyn Fn(BoxFuture<()>) + Send + Sync>,
+    block_on: BlockOn,
     dataset: String,
     #[derivative(Debug = "ignore")]
     executor: FutureExecutor,
     trace_config: Option<opentelemetry::sdk::trace::Config>,
     transmission_options: libhoney::transmission::Options,
     #[derivative(Debug = "ignore")]
-    on_span_start: Option<Arc<dyn Fn(&mut Span, &Context) + Send + Sync>>,
+    on_span_start: Option<OnSpanStart>,
 }
 impl HoneycombPipelineBuilder {
     /// Assign the SDK trace configuration.
@@ -161,10 +161,7 @@ impl HoneycombPipelineBuilder {
     /// Sets an optional function to be run every time a span starts.
     ///
     /// This allows manipulation of the span based on the current `Context`.
-    pub fn with_on_span_start(
-        mut self,
-        on_span_start: Arc<dyn Fn(&mut Span, &Context) + Send + Sync>,
-    ) -> Self {
+    pub fn with_on_span_start(mut self, on_span_start: OnSpanStart) -> Self {
         self.on_span_start = Some(on_span_start);
         self
     }
@@ -176,6 +173,7 @@ impl HoneycombPipelineBuilder {
         (HoneycombFlusher, opentelemetry::sdk::trace::Tracer),
         Box<dyn std::error::Error + Send + Sync>,
     > {
+        debug!("Installing honeycomb pipeline");
         let client = libhoney::init(libhoney::Config {
             executor: self.executor,
             options: libhoney::client::Options {
@@ -208,6 +206,7 @@ impl HoneycombPipelineBuilder {
             None,
         );
         let _ = opentelemetry::global::set_tracer_provider(provider);
+        debug!("Ok we set the global tracer provider");
 
         Ok((
             HoneycombFlusher {
@@ -226,8 +225,9 @@ pub struct HoneycombFlusher {
 }
 impl HoneycombFlusher {
     pub async fn flush(&self) -> Result<(), HoneycombExporterError> {
-        log::debug!("Flushing Honeycomb client");
+        debug!("Flushing Honeycomb client");
         let mut guard = self.client.write().await;
+        debug!("Flushing Honeycomb client (acquired lock)");
         guard
             .as_mut()
             .ok_or(HoneycombExporterError::Shutdown)?
@@ -255,11 +255,12 @@ impl ExportError for HoneycombExporterError {
 }
 
 fn timestamp_from_system_time(ts: SystemTime) -> DateTime<Utc> {
-    Utc.timestamp_millis(
+    Utc.timestamp_millis_opt(
         ts.duration_since(UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_millis() as u64 as i64,
     )
+    .unwrap()
 }
 
 fn otel_value_to_serde_json(value: opentelemetry::Value) -> Value {
@@ -287,10 +288,10 @@ fn otel_value_to_serde_json(value: opentelemetry::Value) -> Value {
         }
         opentelemetry::Value::Array(Array::String(vals)) => Value::Array(
             vals.into_iter()
-                .map(|v| Value::String(v.into_owned()))
+                .map(|v| Value::String(v.as_str().to_string()))
                 .collect(),
         ),
-        opentelemetry::Value::String(val) => Value::String(val.into_owned()),
+        opentelemetry::Value::String(val) => Value::String(val.as_str().to_string()),
     }
 }
 
@@ -300,16 +301,18 @@ struct HoneycombSpanProcessor {
     #[derivative(Debug = "ignore")]
     exporter: Mutex<HoneycombSpanExporter>,
     #[derivative(Debug = "ignore")]
-    on_span_start: Option<Arc<dyn Fn(&mut Span, &Context) + Send + Sync>>,
+    on_span_start: Option<OnSpanStart>,
 }
 impl SpanProcessor for HoneycombSpanProcessor {
     fn on_start(&self, span: &mut Span, cx: &Context) {
+        debug!("SpanProcessor::on_start");
         if let Some(ref on_span_start) = self.on_span_start {
             (on_span_start)(span, cx)
         }
     }
 
     fn on_end(&self, span: SpanData) {
+        debug!("SpanProcessor::on_end");
         if let Ok(mut exporter) = self.exporter.lock() {
             // Libhoney implements its own batching, so we just export the span immediately instead
             // of double-batching (which would require double-flushing, etc.).
@@ -323,11 +326,13 @@ impl SpanProcessor for HoneycombSpanProcessor {
     }
 
     fn force_flush(&self) -> TraceResult<()> {
+        debug!("SpanProcessor::force_flush");
         // This processor does no batching, so nothing to flush.
         Ok(())
     }
 
     fn shutdown(&mut self) -> TraceResult<()> {
+        debug!("SpanProcessor::shutdown");
         if let Ok(mut exporter) = self.exporter.lock() {
             exporter.shutdown();
             Ok(())
@@ -346,7 +351,7 @@ struct HoneycombSpanExporter {
     #[derivative(Debug = "ignore")]
     client: Arc<RwLock<Option<Client<Transmission>>>>,
     #[derivative(Debug = "ignore")]
-    block_on: Arc<dyn Fn(BoxFuture<()>) + Send + Sync>,
+    block_on: BlockOn,
 }
 impl HoneycombSpanExporter {
     fn new_trace_event<I>(
@@ -355,7 +360,7 @@ impl HoneycombSpanExporter {
         trace_id: TraceId,
         parent_id: SpanId,
         attributes: I,
-        resource: &Option<Arc<Resource>>,
+        resource: &Resource,
     ) -> Event
     where
         I: IntoIterator<Item = (opentelemetry::Key, opentelemetry::Value)>,
@@ -379,133 +384,147 @@ impl HoneycombSpanExporter {
             event.add_field("trace.parent_id", Value::String(parent_id.to_string()));
         }
 
-        if let Some(resource) = resource.as_ref().filter(|resource| !resource.is_empty()) {
-            for (k, v) in resource
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .chain(attributes.into_iter())
-            {
-                event.add_field(k.as_str(), otel_value_to_serde_json(v.clone()))
-            }
-        };
+        for (k, v) in resource
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain(attributes.into_iter())
+        {
+            event.add_field(k.as_str(), otel_value_to_serde_json(v.clone()))
+        }
 
         event
     }
 }
 
-#[async_trait]
 impl SpanExporter for HoneycombSpanExporter {
-    async fn export(&mut self, batch: Vec<SpanData>) -> ExportResult {
-        debug!("Exporting batch of {} spans", batch.len());
-        for span in batch {
-            let client_guard = self.client.read().await;
-            let client = client_guard
-                .as_ref()
-                .ok_or(HoneycombExporterError::Shutdown)?;
-            let mut event = Self::new_trace_event(
-                client,
-                span.start_time,
-                span.span_context.trace_id(),
-                span.parent_span_id,
-                span.attributes,
-                &span.resource,
-            );
-            event.add_field(
-                "trace.span_id",
-                Value::String(span.span_context.span_id().to_string()),
-            );
-            event.add_field("name", Value::String(span.name.to_string()));
-            if let Ok(duration_ms) = span.end_time.duration_since(span.start_time) {
-                event.add_field(
-                    "duration_ms",
-                    Value::Number((duration_ms.as_millis() as u64).into()),
-                );
-            }
-            event.add_field(
-                "response.status_code",
-                Value::Number((span.status_code as i32).into()),
-            );
-            event.add_field(
-                "status.message",
-                Value::String(span.status_message.to_string()),
-            );
-            event.add_field("span.kind", Value::String(format!("{}", span.span_kind)));
-
-            if !matches!(span.status_code, StatusCode::Unset) {
-                event.add_field(
-                    "error",
-                    Value::Bool(!matches!(span.status_code, StatusCode::Ok)),
-                );
-            }
-
-            trace!("Sending Honeycomb span event: {:#?}", event);
-            event.send(client).await.map_err(|err| {
-                TraceError::ExportFailed(Box::new(HoneycombExporterError::Honeycomb(err)))
-            })?;
-
-            for span_event in span.events.into_iter() {
+    fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
+        debug!("Export was called with a batch");
+        let client = self.client.clone();
+        Box::pin(async move {
+            debug!("Exporting batch of {} spans", batch.len());
+            for span in batch {
+                let client_guard = client.read().await;
+                let client = client_guard
+                    .as_ref()
+                    .ok_or(HoneycombExporterError::Shutdown)?;
                 let mut event = Self::new_trace_event(
                     client,
-                    span_event.timestamp,
+                    span.start_time,
                     span.span_context.trace_id(),
-                    // The parent of the event is the current span, as opposed to the parent of the span,
-                    // which is some other span (unless it's the root span).
-                    span.span_context.span_id(),
-                    span_event
-                        .attributes
-                        .into_iter()
-                        .map(|KeyValue { key, value }| (key, value)),
+                    span.parent_span_id,
+                    span.attributes,
                     &span.resource,
                 );
-                event.add_field("duration_ms", Value::Number(0.into()));
-                event.add_field("name", Value::String(span_event.name.to_string()));
                 event.add_field(
-                    "meta.annotation_type",
-                    Value::String("span_event".to_string()),
+                    "trace.span_id",
+                    Value::String(span.span_context.span_id().to_string()),
                 );
-
-                trace!("Sending Honeycomb span event event: {:#?}", event);
-                event.send(client).await.map_err(|err| {
-                    TraceError::ExportFailed(Box::new(HoneycombExporterError::Honeycomb(err)))
-                })?;
-            }
-
-            for span_link in span.links.into_iter() {
-                let mut link_event = client.new_event();
-
-                link_event.add_field(
-                    "trace.trace_id",
-                    Value::String(span.span_context.trace_id().to_string()),
-                );
-                if span.span_context.span_id() != SpanId::INVALID {
-                    link_event.add_field(
-                        "trace.parent_id",
-                        Value::String(span.span_context.span_id().to_string()),
+                event.add_field("name", Value::String(span.name.to_string()));
+                if let Ok(duration_ms) = span.end_time.duration_since(span.start_time) {
+                    event.add_field(
+                        "duration_ms",
+                        Value::Number((duration_ms.as_millis() as u64).into()),
                     );
                 }
 
-                link_event.add_field(
-                    "trace.link.trace_id",
-                    Value::String(span_link.span_context().trace_id().to_string()),
-                );
-                link_event.add_field(
-                    "trace.link.span_id",
-                    Value::String(span_link.span_context().span_id().to_string()),
-                );
-                link_event.add_field("meta.annotation_type", Value::String("link".to_string()));
-                link_event.add_field("ref_type", Value::Number(Number::from_f64(0.).unwrap()));
-
-                for KeyValue { key, value } in span_link.attributes() {
-                    link_event.add_field(key.as_str(), otel_value_to_serde_json(value.clone()))
+                match &span.status {
+                    Status::Unset => {
+                        event.add_field("response.status_code", Value::Number(0.into()))
+                    }
+                    Status::Error { description } => {
+                        event.add_field("response.status_code", Value::Number(2.into()));
+                        event.add_field("error", Value::Bool(true));
+                        event.add_field("status.message", Value::String(description.to_string()));
+                    }
+                    Status::Ok => {
+                        event.add_field("response.status_code", Value::Number(1.into()));
+                        event.add_field("$rror", Value::Bool(false));
+                    }
                 }
 
-                trace!("Sending Honeycomb span link event: {:#?}", event);
-                link_event.send(client).await.map_err(|err| {
+                event.add_field(
+                    "span.kind",
+                    Value::String(
+                        match span.span_kind {
+                            SpanKind::Client => "client",
+                            SpanKind::Server => "server",
+                            SpanKind::Producer => "producer",
+                            SpanKind::Consumer => "consumer",
+                            SpanKind::Internal => "internal",
+                        }
+                        .to_string(),
+                    ),
+                );
+
+                trace!("Sending Honeycomb span event: {:#?}", event);
+                event.send(client).await.map_err(|err| {
                     TraceError::ExportFailed(Box::new(HoneycombExporterError::Honeycomb(err)))
                 })?;
+
+                for span_event in span.events.into_iter() {
+                    let mut event = Self::new_trace_event(
+                        client,
+                        span_event.timestamp,
+                        span.span_context.trace_id(),
+                        // The parent of the event is the current span, as opposed to the parent of the span,
+                        // which is some other span (unless it's the root span).
+                        span.span_context.span_id(),
+                        span_event
+                            .attributes
+                            .into_iter()
+                            .map(|KeyValue { key, value }| (key, value)),
+                        &span.resource,
+                    );
+                    event.add_field("duration_ms", Value::Number(0.into()));
+                    event.add_field("name", Value::String(span_event.name.to_string()));
+                    event.add_field(
+                        "meta.annotation_type",
+                        Value::String("span_event".to_string()),
+                    );
+
+                    trace!("Sending Honeycomb span event event: {:#?}", event);
+                    event.send(client).await.map_err(|err| {
+                        TraceError::ExportFailed(Box::new(HoneycombExporterError::Honeycomb(err)))
+                    })?;
+                }
+
+                for span_link in span.links.into_iter() {
+                    let mut link_event = client.new_event();
+
+                    link_event.add_field(
+                        "trace.trace_id",
+                        Value::String(span.span_context.trace_id().to_string()),
+                    );
+                    if span.span_context.span_id() != SpanId::INVALID {
+                        link_event.add_field(
+                            "trace.parent_id",
+                            Value::String(span.span_context.span_id().to_string()),
+                        );
+                    }
+
+                    link_event.add_field(
+                        "trace.link.trace_id",
+                        Value::String(span_link.span_context.trace_id().to_string()),
+                    );
+                    link_event.add_field(
+                        "trace.link.span_id",
+                        Value::String(span_link.span_context.span_id().to_string()),
+                    );
+                    link_event.add_field("meta.annotation_type", Value::String("link".to_string()));
+                    link_event.add_field("ref_type", Value::Number(Number::from_f64(0.).unwrap()));
+
+                    for KeyValue { key, value } in span_link.attributes {
+                        link_event.add_field(key.as_str(), otel_value_to_serde_json(value.clone()))
+                    }
+
+                    trace!("Sending Honeycomb span link event: {:#?}", event);
+                    link_event.send(client).await.map_err(|err| {
+                        TraceError::ExportFailed(Box::new(HoneycombExporterError::Honeycomb(err)))
+                    })?;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Shuts down the exporter.
@@ -528,6 +547,20 @@ impl SpanExporter for HoneycombSpanExporter {
 
 impl Drop for HoneycombSpanExporter {
     fn drop(&mut self) {
+        debug!("Dropping HoneycombSpanExporter");
         self.shutdown();
+    }
+}
+
+struct TokioExecutor;
+
+impl futures::task::Spawn for TokioExecutor {
+    fn spawn_obj(
+        &self,
+        future: futures::task::FutureObj<'static, ()>,
+    ) -> Result<(), futures::task::SpawnError> {
+        debug!("We're spawning a future");
+        tokio::spawn(future);
+        Ok(())
     }
 }

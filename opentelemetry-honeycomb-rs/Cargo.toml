@@ -8,20 +8,18 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-async-channel = "1.5"
-async-std = "1.9"
+async-channel = "1.8"
+async-std = "1.12"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
-derivative = "2.1"
+derivative = "2.2"
 futures = "0.3"
 hazy = "0.1"
 # Include unmerged changes to support flushing and various async improvements.
 libhoney-rust = { git = "https://github.com/ramosbugs/libhoney-rust", rev = "98710516cb63d3393d26a22d5493a421c550525a" }
-log = "0.4"
-opentelemetry = "0.17"
+# Adds `SpanProcessor::is_exporter` for upstream filtering
+opentelemetry = "0.18"
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.0", features = ["rt"] }
-
-[dev-dependencies]
-async_executors = { version = "0.6", features = ["tokio_tp"] }
+tokio = { version = "1.25", features = ["rt"] }
+tracing = "0.1.37"
