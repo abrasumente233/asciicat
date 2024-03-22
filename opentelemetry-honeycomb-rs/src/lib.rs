@@ -43,15 +43,13 @@ use futures::future::BoxFuture;
 use hazy::OpaqueDebug;
 use libhoney::transmission::Transmission;
 use libhoney::{Client, Event, FieldHolder, Response, Value};
-use opentelemetry::sdk::export::ExportError;
-use opentelemetry::sdk::trace::{Span, SpanProcessor};
-use opentelemetry::sdk::Resource;
+use opentelemetry::trace::SpanKind;
 use opentelemetry::trace::{SpanId, Status, TraceError, TraceId, TraceResult, TracerProvider};
-use opentelemetry::{
-    sdk::export::trace::{ExportResult, SpanData, SpanExporter},
-    trace::SpanKind,
-};
 use opentelemetry::{Array, Context, KeyValue};
+use opentelemetry_sdk::export::trace::{ExportResult, SpanData, SpanExporter};
+use opentelemetry_sdk::export::ExportError;
+use opentelemetry_sdk::trace::{Span, SpanProcessor};
+use opentelemetry_sdk::Resource;
 use serde_json::Number;
 use thiserror::Error;
 use tracing::{debug, error, trace};
@@ -93,13 +91,18 @@ where
 }
 
 /// Create a new exporter pipeline builder.
-pub fn new_pipeline(
+pub fn new_pipeline<B>(
     api_key: impl Into<HoneycombApiKey>,
     dataset: String,
-) -> HoneycombPipelineBuilder {
+    executor: Arc<tokio::runtime::Runtime>,
+    block_on: B,
+) -> HoneycombPipelineBuilder
+where
+    B: Fn(BoxFuture<()>) + Send + Sync + 'static,
+{
     HoneycombPipelineBuilder {
         api_key: api_key.into(),
-        block_on: Arc::new(|f| tokio::runtime::Handle::current().block_on(f)),
+        block_on: Arc::new(block_on),
         dataset,
         trace_config: None,
         transmission_options: libhoney::transmission::Options {
@@ -111,7 +114,7 @@ pub fn new_pipeline(
             ..Default::default()
         },
         on_span_start: None,
-        executor: Arc::new(TokioExecutor),
+        executor: Arc::new(TokioExecutor(executor)),
     }
 }
 
@@ -128,14 +131,14 @@ pub struct HoneycombPipelineBuilder {
     dataset: String,
     #[derivative(Debug = "ignore")]
     executor: FutureExecutor,
-    trace_config: Option<opentelemetry::sdk::trace::Config>,
+    trace_config: Option<opentelemetry_sdk::trace::Config>,
     transmission_options: libhoney::transmission::Options,
     #[derivative(Debug = "ignore")]
     on_span_start: Option<OnSpanStart>,
 }
 impl HoneycombPipelineBuilder {
     /// Assign the SDK trace configuration.
-    pub fn with_trace_config(mut self, config: opentelemetry::sdk::trace::Config) -> Self {
+    pub fn with_trace_config(mut self, config: opentelemetry_sdk::trace::Config) -> Self {
         self.trace_config = Some(config);
         self
     }
@@ -170,7 +173,7 @@ impl HoneycombPipelineBuilder {
     pub fn install(
         mut self,
     ) -> Result<
-        (HoneycombFlusher, opentelemetry::sdk::trace::Tracer),
+        (HoneycombFlusher, opentelemetry_sdk::trace::Tracer),
         Box<dyn std::error::Error + Send + Sync>,
     > {
         debug!("Installing honeycomb pipeline");
@@ -191,7 +194,7 @@ impl HoneycombPipelineBuilder {
             client: client_lock.clone(),
         };
 
-        let mut provider_builder = opentelemetry::sdk::trace::TracerProvider::builder()
+        let mut provider_builder = opentelemetry_sdk::trace::TracerProvider::builder()
             .with_span_processor(HoneycombSpanProcessor {
                 exporter: Mutex::new(exporter),
                 on_span_start: self.on_span_start,
@@ -203,6 +206,7 @@ impl HoneycombPipelineBuilder {
         let tracer = provider.versioned_tracer(
             "opentelemetry-honeycomb-rs",
             Some(env!("CARGO_PKG_VERSION")),
+            None::<&str>,
             None,
         );
         let _ = opentelemetry::global::set_tracer_provider(provider);
@@ -214,6 +218,61 @@ impl HoneycombPipelineBuilder {
                 responses: client_responses,
             },
             tracer,
+        ))
+    }
+
+    /// Same as `install`, except this doesn't not install the global tracer
+    pub fn provider(
+        mut self,
+    ) -> Result<
+        (
+            HoneycombFlusher,
+            opentelemetry_sdk::trace::Tracer,
+            opentelemetry_sdk::trace::TracerProvider,
+        ),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        debug!("Installing honeycomb pipeline");
+        let client = libhoney::init(libhoney::Config {
+            executor: self.executor,
+            options: libhoney::client::Options {
+                api_key: self.api_key.into_inner(),
+                dataset: self.dataset,
+                ..Default::default()
+            },
+            transmission_options: self.transmission_options,
+        })?;
+        let client_responses = client.responses();
+        let client_lock = Arc::new(RwLock::new(Some(client)));
+
+        let exporter = HoneycombSpanExporter {
+            block_on: self.block_on,
+            client: client_lock.clone(),
+        };
+
+        let mut provider_builder = opentelemetry_sdk::trace::TracerProvider::builder()
+            .with_span_processor(HoneycombSpanProcessor {
+                exporter: Mutex::new(exporter),
+                on_span_start: self.on_span_start,
+            });
+        if let Some(config) = self.trace_config.take() {
+            provider_builder = provider_builder.with_config(config);
+        }
+        let provider = provider_builder.build();
+        let tracer = provider.versioned_tracer(
+            "opentelemetry-honeycomb-rs",
+            Some(env!("CARGO_PKG_VERSION")),
+            None::<&str>,
+            None,
+        );
+
+        Ok((
+            HoneycombFlusher {
+                client: client_lock,
+                responses: client_responses,
+            },
+            tracer,
+            provider,
         ))
     }
 }
@@ -363,7 +422,7 @@ impl HoneycombSpanExporter {
         resource: &Resource,
     ) -> Event
     where
-        I: IntoIterator<Item = (opentelemetry::Key, opentelemetry::Value)>,
+        I: IntoIterator<Item = opentelemetry::KeyValue>,
     {
         let mut event = client.new_event();
         let timestamp = timestamp_from_system_time(start_time);
@@ -384,12 +443,15 @@ impl HoneycombSpanExporter {
             event.add_field("trace.parent_id", Value::String(parent_id.to_string()));
         }
 
-        for (k, v) in resource
+        for kv in resource
             .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .map(|(k, v)| KeyValue {
+                key: k.clone(),
+                value: v.clone(),
+            })
             .chain(attributes.into_iter())
         {
-            event.add_field(k.as_str(), otel_value_to_serde_json(v.clone()))
+            event.add_field(kv.key.as_str(), otel_value_to_serde_json(kv.value.clone()))
         }
 
         event
@@ -469,10 +531,7 @@ impl SpanExporter for HoneycombSpanExporter {
                         // The parent of the event is the current span, as opposed to the parent of the span,
                         // which is some other span (unless it's the root span).
                         span.span_context.span_id(),
-                        span_event
-                            .attributes
-                            .into_iter()
-                            .map(|KeyValue { key, value }| (key, value)),
+                        span_event.attributes.into_iter(),
                         &span.resource,
                     );
                     event.add_field("duration_ms", Value::Number(0.into()));
@@ -552,7 +611,7 @@ impl Drop for HoneycombSpanExporter {
     }
 }
 
-struct TokioExecutor;
+struct TokioExecutor(Arc<tokio::runtime::Runtime>);
 
 impl futures::task::Spawn for TokioExecutor {
     fn spawn_obj(
@@ -560,7 +619,7 @@ impl futures::task::Spawn for TokioExecutor {
         future: futures::task::FutureObj<'static, ()>,
     ) -> Result<(), futures::task::SpawnError> {
         debug!("We're spawning a future");
-        tokio::spawn(future);
+        self.0.spawn(future);
         Ok(())
     }
 }
