@@ -27,17 +27,18 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default;
 
         # setting up crane lib with the shipyard registry
-        craneLibWithoutRegistry = crane.lib.${system}.overrideToolchain rustToolchain;
-        shipyardToken = builtins.readFile ./secrets/shipyard;
-        craneLib = craneLibWithoutRegistry.appendCrateRegistries [
-          (craneLibWithoutRegistry.registryFromDownloadUrl {
-            indexUrl = "ssh://git@ssh.shipyard.rs/abrasumente/crate-index.git";
-            dl = "https://crates.shipyard.rs/api/v1/crates";
-            fetchurlExtraArgs = {
-              curlOptsList = [ "--header" "User-Agent: shipyard ${shipyardToken}" ];
-            };
-          })
-        ];
+        # craneLibWithoutRegistry = crane.lib.${system}.overrideToolchain rustToolchain;
+        # shipyardToken = builtins.readFile ./secrets/shipyard;
+        # craneLib = craneLibWithoutRegistry.appendCrateRegistries [
+        #   (craneLibWithoutRegistry.registryFromDownloadUrl {
+        #     indexUrl = "ssh://git@ssh.shipyard.rs/abrasumente/crate-index.git";
+        #     dl = "https://crates.shipyard.rs/api/v1/crates";
+        #     fetchurlExtraArgs = {
+        #       curlOptsList = [ "--header" "User-Agent: shipyard ${shipyardToken}" ];
+        #     };
+        #   })
+        # ];
+        craneLib = crane.lib.${system}.overrideToolchain rustToolchain;
 
         # common source and build dependencies
         isDarwin = pkgs.lib.strings.hasSuffix "-darwin" system;
