@@ -26,14 +26,14 @@ jobs:
       - nix/install
       - run: nix --version
       - run: nix build .#dockerImage
-      - run: ls .
-      - store_artifacts:
-          path: ./result
-          destination: asciicat-x86_64-linux-oci.tar.gz
       - save_cache:
           key: nix-store
           paths:
             - /nix/store
+      - run: tree .
+      - store_artifacts:
+          path: result/bin/asciicat
+          destination: asciicat-x86_64-linux
 
 # Orchestrate jobs using workflows
 # See: https://circleci.com/docs/workflows/ & https://circleci.com/docs/configuration-reference/#workflows
