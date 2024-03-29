@@ -1,9 +1,9 @@
 # Use the latest 2.1 version of CircleCI pipeline process engine.
 # See: https://circleci.com/docs/configuration-reference
 version: 2.1
-#
-# orbs:
-#   nix: eld/nix@1.1.1
+
+orbs:
+  nix: eld/nix@1.1.1
 
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/jobs-steps/#jobs-overview & https://circleci.com/docs/configuration-reference/#jobs
@@ -11,10 +11,10 @@ jobs:
   build:
     # Specify the execution environment. You can specify an image from Docker Hub or use one of our convenience images from CircleCI's Developer Hub.
     # See: https://circleci.com/docs/executor-intro/ & https://circleci.com/docs/configuration-reference/#executor-job
-    docker:
+    machine:
       # Specify the version you desire here
       # See: https://circleci.com/developer/images/image/cimg/base
-      - image: cimg/rust:1.77.0
+      image: ubuntu-2204:2024.01.2
 
     resource_class: large
 
@@ -23,8 +23,7 @@ jobs:
     steps:
       # Checkout the code as the first step.
       - checkout
-      # - nix/install
-      - run: curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
+      - nix/install
       - run: cargo --version
       - run: nix --version
       # - run: cargo build --release
