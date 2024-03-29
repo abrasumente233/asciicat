@@ -11,7 +11,7 @@ jobs:
             - nix
       - checkout
       - run: nix --version
-      - run: nix build .#
+      - run: nix build --extra-experimental-features nix-command --extra-experimental-features flakes .#
       - save_cache:
           key: nix
           paths:
