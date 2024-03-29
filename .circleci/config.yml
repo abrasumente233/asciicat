@@ -24,7 +24,6 @@ jobs:
       # Checkout the code as the first step.
       - checkout
       - nix/install
-      - run: cargo --version
       - run: nix --version
       # - run: cargo build --release
       # - store_artifacts:
