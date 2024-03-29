@@ -26,8 +26,7 @@ jobs:
       - nix/install
       - run: nix --version
       - run: nix build .#dockerImage
-      - run: tree .
-      - run: tree result
+      - run: ls .
       - store_artifacts:
           path: ./result
           destination: asciicat-x86_64-linux-oci.tar.gz
