@@ -1,16 +1,21 @@
 version: '2.1'
 
 orbs:
-  rust: circleci/rust@x.y.z
+  rust: circleci/rust@1.6.1
 
-workflows:
-  production:
-    jobs:
-      resource_class: xlarge
-
+jobs:
+  build:
+    resource_class: xlarge
+    steps:
       - rust/lint-test-build:
           release: true
       - store_artifacts:
           path: target/release/asciicat
           destination: asciicat-x86_64-linux
+
+workflows:
+  production:
+    jobs:
+      - build
+
 
