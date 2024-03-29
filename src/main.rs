@@ -29,7 +29,7 @@ struct ServerState {
 
 fn main() {
     let _guard = sentry::init((
-        std::env::var("SENTRY_DSN").expect("$SENTRY_DSN should be set!"),
+        std::env::var("SENTRY_DSN").expect("$SENTRY_DSN should be set!?"),
         sentry::ClientOptions {
             release: sentry::release_name!(),
             ..Default::default()
