@@ -2,6 +2,9 @@
 # See: https://circleci.com/docs/configuration-reference
 version: 2.1
 
+orbs:
+  nix: eld/nix@1.1.1
+
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/jobs-steps/#jobs-overview & https://circleci.com/docs/configuration-reference/#jobs
 jobs:
@@ -20,6 +23,7 @@ jobs:
     steps:
       # Checkout the code as the first step.
       - checkout
+      - nix/install
       - run: cargo --version
       - run: cargo build --release
       - store_artifacts:
