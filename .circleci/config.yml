@@ -13,6 +13,8 @@ jobs:
       # See: https://circleci.com/developer/images/image/cimg/base
       - image: cimg/rust:1.77.0
 
+    resource_class: xlarge
+
     # Add steps to the job
     # See: https://circleci.com/docs/jobs-steps/#steps-overview & https://circleci.com/docs/configuration-reference/#steps
     steps:
@@ -21,7 +23,7 @@ jobs:
       - run: cargo --version
       - run: cargo build --release
       - store_artifacts:
-          path: ./target/debug/asciicat
+          path: ./target/release/asciicat
           destination: asciicat-x86_64-linux
 
 # Orchestrate jobs using workflows
