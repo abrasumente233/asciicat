@@ -3,7 +3,7 @@ version: 2.1
 jobs:
   build:
     docker:
-      - image: nixorg/nix:circleci
+      - image: nixos/nix:latest
     resource_class: large
     steps:
       - restore_cache:
