@@ -7,6 +7,7 @@ jobs:
   build:
     resource_class: xlarge
     steps:
+      - checkout
       - rust/lint-test-build:
           release: true
       - store_artifacts:
@@ -14,7 +15,7 @@ jobs:
           destination: asciicat-x86_64-linux
 
 workflows:
-  production:
+  build-workflow:
     jobs:
       - build
 
