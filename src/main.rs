@@ -6,25 +6,28 @@ use axum::{
     Router,
 };
 use color_eyre::{eyre::eyre, Result};
-use locat::Locat;
+// use locat::Locat;
 use opentelemetry::{
     global,
-    trace::{get_active_span, FutureExt, Span, Status, TraceContextExt, Tracer},
+    trace::{
+        get_active_span, FutureExt, Span, Status, TraceContextExt, Tracer, TracerProvider as _,
+    },
     Context, KeyValue,
 };
 use serde::Deserialize;
 use std::{net::IpAddr, str::FromStr, sync::Arc};
 use tracing::{info, warn, Level};
-use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    filter::Targets, layer::SubscriberExt, util::SubscriberInitExt, Registry,
+};
 
 #[derive(Clone)]
 struct ServerState {
     client: reqwest::Client,
-    locat: Arc<Locat>,
+    // locat: Arc<Locat>,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let _guard = sentry::init((
         std::env::var("SENTRY_DSN").expect("$SENTRY_DSN should be set"),
         sentry::ClientOptions {
@@ -33,12 +36,32 @@ async fn main() {
         },
     ));
 
-    let (_honeyguard, _tracer) = opentelemetry_honeycomb::new_pipeline(
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let runtime = Arc::new(runtime);
+
+    let (_honeyguard, _tracer, provider) = opentelemetry_honeycomb::new_pipeline(
         std::env::var("HONEYCOMB_API_KEY").expect("$HONEYCOMB_API_KEY should be set"),
         "asciicat".into(),
+        runtime.clone(),
+        move |f| runtime.block_on(f),
     )
-    .install()
+    .provider()
     .unwrap();
+
+    let tracer = provider.tracer("readme_example");
+    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let subscriber = Registry::default().with(telemetry);
+    tracing::subscriber::with_default(subscriber, || {
+        // Spans will be sent to the configured OpenTelemetry exporter
+        let root = tracing::span!(tracing::Level::TRACE, "app_start", work_units = 2);
+        let _enter = root.enter();
+
+        tracing::error!("This event will be logged in the root span.");
+    });
 
     let filter = Targets::from_str(std::env::var("RUST_LOG").as_deref().unwrap_or("info"))
         .expect("Invalid RUST_LOG value");
@@ -49,6 +72,13 @@ async fn main() {
         .with(filter)
         .init();
 
+    app();
+
+    global::shutdown_tracer_provider();
+}
+
+#[tokio::main]
+async fn app() {
     let quit_sig = async {
         _ = tokio::signal::ctrl_c().await;
         warn!("Initiating graceful shutdown!");
@@ -59,7 +89,7 @@ async fn main() {
     let analytics_db_path = std::env::var("ANALYTICS_DB").expect("$ANALYTICS_DB should be set");
     let state = ServerState {
         client: reqwest::Client::default(),
-        locat: Arc::new(Locat::new(&country_db_path, &analytics_db_path).unwrap()),
+        // locat: Arc::new(Locat::new(&country_db_path, &analytics_db_path).unwrap()),
     };
 
     let app = Router::new()
@@ -67,7 +97,7 @@ async fn main() {
         .route("/analytics", get(analytics_get))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await.unwrap();
     info!("Listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app)
         .with_graceful_shutdown(quit_sig)
@@ -84,9 +114,9 @@ fn get_client_addr(headers: &HeaderMap) -> Option<IpAddr> {
 
 async fn analytics_get(State(state): State<ServerState>) -> impl IntoResponse {
     let mut response = String::new();
-    for (country, count) in state.locat.get_analytics().await.unwrap() {
-        response.push_str(&format!("{}: {}\n", country, count));
-    }
+    // for (country, count) in state.locat.get_analytics().await.unwrap() {
+    //     response.push_str(&format!("{}: {}\n", country, count));
+    // }
     response.into_response()
 }
 
@@ -102,15 +132,15 @@ async fn root_get(headers: HeaderMap, State(state): State<ServerState>) -> impl 
     ));
 
     // get geo-location from IP
-    if let Some(addr) = get_client_addr(&headers) {
-        match state.locat.ip_to_iso_code(addr).await {
-            Some(country) => {
-                info!("Got request from {}", country);
-                span.set_attribute(KeyValue::new("country", country.to_owned()));
-            }
-            None => warn!("Could not find country for IP address"),
-        }
-    }
+    // if let Some(addr) = get_client_addr(&headers) {
+    //     match state.locat.ip_to_iso_code(addr).await {
+    //         Some(country) => {
+    //             info!("Got request from {}", country);
+    //             span.set_attribute(KeyValue::new("country", country.to_owned()));
+    //         }
+    //         None => warn!("Could not find country for IP address"),
+    //     }
+    // }
 
     root_get_inner(state)
         .with_context(Context::current_with_span(span))
